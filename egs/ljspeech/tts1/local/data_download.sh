@@ -14,7 +14,7 @@ fi
 set -euo pipefail
 
 cwd=$(pwd)
-if [ ! -e "${download_dir}/LJSpeech-1.1" ]; then
+if [ ! -e "${download_dir}/hifi_9017" ]; then
     mkdir -p "${download_dir}"
     cd "${download_dir}"
     wget http://data.keithito.com/data/speech/LJSpeech-1.1.tar.bz2

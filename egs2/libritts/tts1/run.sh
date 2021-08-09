@@ -38,7 +38,7 @@ local_data_opts="--trim_all_silence true" # trim all silence in the audio
     --n_fft "${n_fft}" \
     --n_shift "${n_shift}" \
     --win_length "${win_length}" \
-    --use_xvector true \
+    --use_xvector false \
     --token_type phn \
     --cleaner "${cleaner}" \
     --g2p "${g2p}" \

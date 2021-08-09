@@ -1,0 +1,7 @@
+
+
+if __name__ == "__main__":
+    text = "--use_preprocessor true --token_type phn --token_list data/token_list/phn_tacotron_g2p_en_no_space/tokens.txt --non_linguistic_symbols none --cleaner tacotron --g2p g2p_en_no_space --normalize global_mvn --normalize_conf stats_file=exp/tts_stats_raw_phn_tacotron_g2p_en_no_space/train/feats_stats.npz --resume true --fold_length 150 --fold_length 204800 --output_dir exp/tts_train_tacotron2_raw_phn_tacotron_g2p_en_no_space --config conf/tuning/train_tacotron2.yaml --feats_extract fbank --feats_extract_conf fs=22050 --feats_extract_conf fmin=80 --feats_extract_conf fmax=7600 --feats_extract_conf n_mels=80 --feats_extract_conf hop_length=256 --feats_extract_conf n_fft=1024 --feats_extract_conf win_length=null --train_data_path_and_name_and_type dump/raw/tr_no_dev/text,text,text --train_data_path_and_name_and_type dump/raw/tr_no_dev/wav.scp,speech,sound --train_shape_file exp/tts_stats_raw_phn_tacotron_g2p_en_no_space/train/text_shape.phn --train_shape_file exp/tts_stats_raw_phn_tacotron_g2p_en_no_space/train/speech_shape --valid_data_path_and_name_and_type dump/raw/dev/text,text,text --valid_data_path_and_name_and_type dump/raw/dev/wav.scp,speech,sound --valid_shape_file exp/tts_stats_raw_phn_tacotron_g2p_en_no_space/valid/text_shape.phn --valid_shape_file exp/tts_stats_raw_phn_tacotron_g2p_en_no_space/valid/speech_shape --ngpu 1 --multiprocessing_distributed True"
+    arr = text.split(" ")
+
+    print("[" + ", ".join(["\"{}\"".format(tmp) for tmp in arr]) + "]")

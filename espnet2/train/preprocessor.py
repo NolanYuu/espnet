@@ -302,6 +302,22 @@ class CommonPreprocessor(AbsPreprocessor):
 
         if self.text_name in data and self.tokenizer is not None:
             text = data[self.text_name]
+            # from transformers import pipeline
+            # generator = pipeline('text-generation', model='gpt2')
+            # data[self.text_name] = []
+            # words = text.split(" ")
+
+            # chunk_len = 3
+            # pseudo_lookahead = 3
+
+            # for i in range(0, len(words), chunk_len):
+            #     chunk = " ".join(words[i:i+chunk_len])
+            #     pseudo = generator(chunk, max_new_tokens=pseudo_lookahead, num_return_sequences=1)[0]["generated_text"]
+            #     pseudo = self.text_cleaner(pseudo)
+            #     tokens = self.tokenizer.text2tokens(pseudo)
+            #     text_ints = self.token_id_converter.tokens2ids(tokens)
+            #     data[self.text_name].append(np.array(text_ints, dtype=np.int64))
+
             text = self.text_cleaner(text)
             tokens = self.tokenizer.text2tokens(text)
             text_ints = self.token_id_converter.tokens2ids(tokens)

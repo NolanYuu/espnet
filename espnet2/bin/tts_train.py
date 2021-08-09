@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 from espnet2.tasks.tts import TTSTask
+# import os
+# os.environ['MASTER_PORT'] = '9901'
 
 
 def get_parser():

@@ -2,7 +2,7 @@
 #  Apache 2.0  (http://www.apache.org/licenses/LICENSE-2.0)
 
 """Fastspeech2 related modules for ESPnet2."""
-
+import six
 import logging
 
 from typing import Dict
@@ -24,7 +24,7 @@ from espnet.nets.pytorch_backend.fastspeech.duration_predictor import (
 from espnet.nets.pytorch_backend.fastspeech.length_regulator import LengthRegulator
 from espnet.nets.pytorch_backend.nets_utils import make_non_pad_mask
 from espnet.nets.pytorch_backend.nets_utils import make_pad_mask
-from espnet.nets.pytorch_backend.tacotron2.decoder import Postnet
+from espnet.nets.pytorch_backend.tacotron2.decoder import Postnet, ZoneOutCell, Prenet, decoder_init
 from espnet.nets.pytorch_backend.transformer.embedding import PositionalEncoding
 from espnet.nets.pytorch_backend.transformer.embedding import ScaledPositionalEncoding
 from espnet.nets.pytorch_backend.transformer.encoder import (
@@ -44,7 +44,137 @@ from espnet2.tts.variance_predictor import VariancePredictor
 # vocoder = load_model(download_pretrained_model(vocoder_tag)).to("cuda").eval()
 # vocoder.remove_weight_norm()
 
-class FastSpeech2(AbsTTS):
+class Decoder(torch.nn.Module):
+    def __init__(
+        self,
+        idim=384,
+        odim=80,
+        dlayers=2,
+        dunits=1024,
+        prenet_layers=2,
+        prenet_units=256,
+        postnet_layers=5,
+        postnet_chans=512,
+        postnet_filts=5,
+        output_activation_fn=None,
+        use_batch_norm=True,
+        use_concate=True,
+        dropout_rate=0.5,
+        zoneout_rate=0.1,
+        reduction_factor=1,
+    ):
+        super(Decoder, self).__init__()
+
+        # store the hyperparameters
+        self.idim = idim
+        self.odim = odim
+        self.output_activation_fn = output_activation_fn
+        self.use_concate = use_concate
+        self.reduction_factor = reduction_factor
+
+
+        # define lstm network
+        prenet_units = prenet_units if prenet_layers != 0 else odim
+        self.lstm = torch.nn.ModuleList()
+        for layer in six.moves.range(dlayers):
+            iunits = idim + prenet_units if layer == 0 else dunits
+            lstm = torch.nn.LSTMCell(iunits, dunits)
+            if zoneout_rate > 0.0:
+                lstm = ZoneOutCell(lstm, zoneout_rate)
+            self.lstm += [lstm]
+
+        # define prenet
+        if prenet_layers > 0:
+            self.prenet = Prenet(
+                idim=odim,
+                n_layers=prenet_layers,
+                n_units=prenet_units,
+                dropout_rate=dropout_rate,
+            )
+        else:
+            self.prenet = None
+
+        # define postnet
+        if postnet_layers > 0:
+            self.postnet = Postnet(
+                idim=idim,
+                odim=odim,
+                n_layers=postnet_layers,
+                n_chans=postnet_chans,
+                n_filts=postnet_filts,
+                use_batch_norm=use_batch_norm,
+                dropout_rate=dropout_rate,
+            )
+        else:
+            self.postnet = None
+
+        # define projection layers
+        iunits = idim + dunits if use_concate else dunits
+        self.feat_out = torch.nn.Linear(iunits, odim * reduction_factor, bias=False)
+        self.prob_out = torch.nn.Linear(iunits, reduction_factor)
+
+        # initialize
+        self.apply(decoder_init)
+
+    def _zero_state(self, hs):
+        init_hs = hs.new_zeros(hs.size(0), self.lstm[0].hidden_size)
+        return init_hs
+
+    def forward(self, hs, ys):
+        # thin out frames (B, Lmax, odim) ->  (B, Lmax/r, odim)
+        if self.reduction_factor > 1:
+            ys = ys[:, self.reduction_factor - 1 :: self.reduction_factor]
+
+        # initialize hidden states of decoder
+        c_list = [self._zero_state(hs)]
+        z_list = [self._zero_state(hs)]
+        for _ in six.moves.range(1, len(self.lstm)):
+            c_list += [self._zero_state(hs)]
+            z_list += [self._zero_state(hs)]
+        prev_out = hs.new_zeros(hs.size(0), self.odim)
+
+        # initialize attention
+
+        # loop for an output sequence
+        outs = []
+        for h, y in zip(hs.transpose(0, 1), ys.transpose(0, 1)):
+            prenet_out = self.prenet(prev_out) if self.prenet is not None else prev_out
+            xs = torch.cat([h, prenet_out], dim=1)
+            z_list[0], c_list[0] = self.lstm[0](xs, (z_list[0], c_list[0]))
+            for i in six.moves.range(1, len(self.lstm)):
+                z_list[i], c_list[i] = self.lstm[i](
+                    z_list[i - 1], (z_list[i], c_list[i])
+                )
+            zcs = (
+                torch.cat([z_list[-1], h], dim=1)
+                if self.use_concate
+                else z_list[-1]
+            )
+            outs += [self.feat_out(zcs).view(hs.size(0), self.odim, -1)]
+            prev_out = y  # teacher forcing
+
+        before_outs = torch.cat(outs, dim=2)  # (B, odim, Lmax)
+
+        if self.reduction_factor > 1:
+            before_outs = before_outs.view(
+                before_outs.size(0), self.odim, -1
+            )  # (B, odim, Lmax)
+
+        if self.postnet is not None:
+            after_outs = before_outs + self.postnet(before_outs)  # (B, odim, Lmax)
+        else:
+            after_outs = before_outs
+        before_outs = before_outs.transpose(2, 1)  # (B, Lmax, odim)
+        after_outs = after_outs.transpose(2, 1)  # (B, Lmax, odim)
+
+        # apply activation function for scaling
+        if self.output_activation_fn is not None:
+            before_outs = self.output_activation_fn(before_outs)
+            after_outs = self.output_activation_fn(after_outs)
+
+        return before_outs, after_outs 
+
+class FastSpeech2_RNN(AbsTTS):
     """FastSpeech2 module.
 
     This is a module of FastSpeech2 described in `FastSpeech 2: Fast and
@@ -315,50 +445,13 @@ class FastSpeech2(AbsTTS):
         # define decoder
         # NOTE: we use encoder as decoder
         # because fastspeech's decoder is the same as encoder
-        if decoder_type == "transformer":
-            self.decoder = TransformerEncoder(
-                idim=0,
-                attention_dim=adim,
-                attention_heads=aheads,
-                linear_units=dunits,
-                num_blocks=dlayers,
-                input_layer=None,
-                dropout_rate=transformer_dec_dropout_rate,
-                positional_dropout_rate=transformer_dec_positional_dropout_rate,
-                attention_dropout_rate=transformer_dec_attn_dropout_rate,
-                pos_enc_class=pos_enc_class,
-                normalize_before=decoder_normalize_before,
-                concat_after=decoder_concat_after,
-                positionwise_layer_type=positionwise_layer_type,
-                positionwise_conv_kernel_size=positionwise_conv_kernel_size,
-            )
-        elif decoder_type == "conformer":
-            self.decoder = ConformerEncoder(
-                idim=0,
-                attention_dim=adim,
-                attention_heads=aheads,
-                linear_units=dunits,
-                num_blocks=dlayers,
-                input_layer=None,
-                dropout_rate=transformer_dec_dropout_rate,
-                positional_dropout_rate=transformer_dec_positional_dropout_rate,
-                attention_dropout_rate=transformer_dec_attn_dropout_rate,
-                normalize_before=decoder_normalize_before,
-                concat_after=decoder_concat_after,
-                positionwise_layer_type=positionwise_layer_type,
-                positionwise_conv_kernel_size=positionwise_conv_kernel_size,
-                macaron_style=use_macaron_style_in_conformer,
-                pos_enc_layer_type=conformer_pos_enc_layer_type,
-                selfattention_layer_type=conformer_self_attn_layer_type,
-                activation_type=conformer_activation_type,
-                use_cnn_module=use_cnn_in_conformer,
-                cnn_module_kernel=conformer_dec_kernel_size,
-            )
-        else:
-            raise ValueError(f"{decoder_type} is not supported.")
+        self.decoder = Decoder(
+            idim=adim,
+            odim=odim,
+        )
 
         # define final projection
-        self.feat_out = torch.nn.Linear(adim, odim * reduction_factor)
+        # self.feat_out = torch.nn.Linear(adim, odim * reduction_factor)
 
         # define postnet
         self.postnet = (
@@ -483,10 +576,10 @@ class FastSpeech2(AbsTTS):
             stats.update(
                 encoder_alpha=self.encoder.embed[-1].alpha.data.item(),
             )
-        if self.decoder_type == "transformer" and self.use_scaled_pos_enc:
-            stats.update(
-                decoder_alpha=self.decoder.embed[-1].alpha.data.item(),
-            )
+        # if self.decoder_type == "transformer" and self.use_scaled_pos_enc:
+        #     stats.update(
+        #         decoder_alpha=self.decoder.embed[-1].alpha.data.item(),
+        #     )
 
         loss, stats, weight = force_gatherable((loss, stats, batch_size), loss.device)
         return loss, stats, weight
@@ -553,10 +646,11 @@ class FastSpeech2(AbsTTS):
             h_masks = self._source_mask(olens_in)
         else:
             h_masks = None
-        zs, _ = self.decoder(hs, h_masks)  # (B, Lmax, adim)
-        before_outs = self.feat_out(zs).view(
-            zs.size(0), -1, self.odim
-        )  # (B, Lmax, odim)
+        zs, _ = self.decoder(hs, ys)  # (B, Lmax, adim)
+        # before_outs = self.feat_out(zs).view(
+        #     zs.size(0), -1, self.odim
+        # )  # (B, Lmax, odim)
+        before_outs = zs
 
         # postnet -> (B, Lmax//r * r, odim)
         if self.postnet is None:
@@ -988,8 +1082,8 @@ class FastSpeech2(AbsTTS):
         # initialize alpha in scaled positional encoding
         if self.encoder_type == "transformer" and self.use_scaled_pos_enc:
             self.encoder.embed[-1].alpha.data = torch.tensor(init_enc_alpha)
-        if self.decoder_type == "transformer" and self.use_scaled_pos_enc:
-            self.decoder.embed[-1].alpha.data = torch.tensor(init_dec_alpha)
+        # if self.decoder_type == "transformer" and self.use_scaled_pos_enc:
+        #     self.decoder.embed[-1].alpha.data = torch.tensor(init_dec_alpha)
 
 
 class FastSpeech2Loss(torch.nn.Module):

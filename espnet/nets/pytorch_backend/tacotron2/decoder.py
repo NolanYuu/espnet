@@ -7,7 +7,12 @@
 """Tacotron2 decoder related modules."""
 
 import six
-
+# import soundfile as sf
+# from parallel_wavegan.utils import download_pretrained_model
+# from parallel_wavegan.utils import load_model
+# vocoder_tag = "ljspeech_multi_band_melgan.v2" #@param ["ljspeech_parallel_wavegan.v1", "ljspeech_full_band_melgan.v2", "ljspeech_multi_band_melgan.v2"] {type:"string"}
+# vocoder = load_model(download_pretrained_model(vocoder_tag)).to("cuda").eval()
+# vocoder.remove_weight_norm()
 import torch
 import torch.nn.functional as F
 
@@ -328,6 +333,7 @@ class Decoder(torch.nn.Module):
         super(Decoder, self).__init__()
 
         # store the hyperparameters
+        self.count = 0
         self.idim = idim
         self.odim = odim
         self.att = att
@@ -613,6 +619,159 @@ class Decoder(torch.nn.Module):
         if self.output_activation_fn is not None:
             outs = self.output_activation_fn(outs)
 
+        return outs, probs, att_ws
+
+    def inference_(
+        self,
+        h,
+        threshold=0.5,
+        minlenratio=0.0,
+        maxlenratio=10.0,
+        use_att_constraint=False,
+        backward_window=None,
+        forward_window=None,
+        buf=20,
+        target_len=20,
+    ):
+        """Generate the sequence of features given the sequences of characters.
+
+        Args:
+            h (Tensor): Input sequence of encoder hidden states (T, C).
+            threshold (float, optional): Threshold to stop generation.
+            minlenratio (float, optional): Minimum length ratio.
+                If set to 1.0 and the length of input is 10,
+                the minimum length of outputs will be 10 * 1 = 10.
+            minlenratio (float, optional): Minimum length ratio.
+                If set to 10 and the length of input is 10,
+                the maximum length of outputs will be 10 * 10 = 100.
+            use_att_constraint (bool):
+                Whether to apply attention constraint introduced in `Deep Voice 3`_.
+            backward_window (int): Backward window size in attention constraint.
+            forward_window (int): Forward window size in attention constraint.
+
+        Returns:
+            Tensor: Output sequence of features (L, odim).
+            Tensor: Output sequence of stop probabilities (L,).
+            Tensor: Attention weights (L, T).
+
+        Note:
+            This computation is performed in auto-regressive manner.
+
+        .. _`Deep Voice 3`: https://arxiv.org/abs/1710.07654
+
+        """
+        # setup
+        assert len(h.size()) == 2
+        hs = h.unsqueeze(0)
+        ilens = [h.size(0)]
+        maxlen = int(buf * 15)
+        minlen = int(buf * 1)
+        print(ilens, self.count, buf, maxlen)
+
+        # initialize hidden states of decoder
+        
+
+        # initialize attention
+        self.att.reset()
+        if self.count == 0:
+            self.c_list = [self._zero_state(hs)]
+            self.z_list = [self._zero_state(hs)]
+            for _ in six.moves.range(1, len(self.lstm)):
+                self.c_list += [self._zero_state(hs)]
+                self.z_list += [self._zero_state(hs)]
+            self.prev_att_w = None
+            self.prev_out = hs.new_zeros(1, self.odim)
+        prev_att_w = self.prev_att_w
+        if prev_att_w is not None:
+            if prev_att_w.size(1) < hs.size(1):
+                new_l = hs.size(1)-prev_att_w.size(1)
+                prev_att_w = torch.cat([prev_att_w, torch.zeros((1, new_l)).cuda()], dim=1)
+            elif prev_att_w.size(1) >= hs.size(1):
+                new_l = hs.size(1)-prev_att_w[:, buf:].size(1)
+                prev_att_w = torch.cat([prev_att_w[:, buf:], torch.zeros((1, new_l)).cuda()], dim=1)
+
+        prev_out = self.prev_out
+        c_list = self.c_list
+        z_list = self.z_list
+
+        # setup for attention constraint
+        last_attended_idx = None
+
+        # loop for an output sequence
+        idx = 0
+        tmp = None
+        outs, att_ws, probs = [], [], []
+
+        while True:
+            # updated index
+            idx += self.reduction_factor
+
+            # decoder calculation
+            att_c, att_w = self.att(
+                hs,
+                ilens,
+                z_list[0],
+                prev_att_w,
+                last_attended_idx=last_attended_idx,
+                backward_window=backward_window,
+                forward_window=forward_window,
+            )
+            att_ws += [att_w]
+            prenet_out = self.prenet(prev_out) if self.prenet is not None else prev_out
+            xs = torch.cat([att_c, prenet_out], dim=1)
+            z_list[0], c_list[0] = self.lstm[0](xs, (z_list[0], c_list[0]))
+            for i in six.moves.range(1, len(self.lstm)):
+                z_list[i], c_list[i] = self.lstm[i](
+                    z_list[i - 1], (z_list[i], c_list[i])
+                )
+            zcs = (
+                torch.cat([z_list[-1], att_c], dim=1)
+                if self.use_concate
+                else z_list[-1]
+            )
+            outs += [self.feat_out(zcs).view(1, self.odim, -1)]  # [(1, odim, r), ...]
+            probs += [torch.sigmoid(self.prob_out(zcs))[0]]  # [(r), ...]
+            prev_out = outs[-1][:, :, -1]  # (1, odim)
+
+            
+            if self.cumulate_att_w and prev_att_w is not None:
+                prev_att_w = prev_att_w + att_w  # Note: error when use +=
+            else:
+                prev_att_w = att_w
+
+            # check whether to finish generation
+            # torch.argmax(att_w).item() >= h.size(0)-1
+            # if tmp is None and torch.argmax(att_w).item() >= target_len-1:
+            #     tmp = 3
+            # if tmp is not None:
+            #     tmp -= 1
+            if torch.argmax(att_w).item() >= target_len-1 or idx >= maxlen:
+                # check mininum length
+                if idx < minlen:
+                    continue
+                outs = torch.cat(outs, dim=2)  # (1, odim, L)
+                if self.postnet is not None:
+                    outs = outs + self.postnet(outs)  # (1, odim, L)
+                outs = outs.transpose(2, 1).squeeze(0)  # (L, odim)
+                probs = torch.cat(probs, dim=0)
+                att_ws = torch.cat(att_ws, dim=0)
+                break
+        
+        print(torch.argmax(att_w).item())
+        self.count += 1
+        self.prev_att_w = prev_att_w
+        self.prev_out = prev_out
+        self.c_list = c_list
+        self.z_list = z_list
+
+        import numpy as np
+        print(outs.shape)
+        np.save("/nolan/inference/{}_{:02d}.mel.npy".format("test", self.count), outs.data.cpu().numpy())
+        # if self.count == 1:
+        #     wav = vocoder.inference(outs)
+        #     sf.write("/nolan/inference/{}.wav".format("test"), wav.data.cpu().numpy(), 22050, "PCM_16")
+        #     import time
+        #     print(time.time())
         return outs, probs, att_ws
 
     def calculate_all_attentions(self, hs, hlens, ys):

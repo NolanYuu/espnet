@@ -435,6 +435,132 @@ class Tacotron2(AbsTTS):
 
         return outs, probs, att_ws
 
+    def inference_(
+        self,
+        text: torch.Tensor,
+        speech: torch.Tensor = None,
+        spembs: torch.Tensor = None,
+        threshold: float = 0.5,
+        minlenratio: float = 0.0,
+        maxlenratio: float = 10.0,
+        use_att_constraint: bool = False,
+        backward_window: int = 1,
+        forward_window: int = 3,
+        use_teacher_forcing: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Generate the sequence of features given the sequences of characters.
+
+        Args:
+            text (LongTensor): Input sequence of characters (T,).
+            speech (Tensor, optional): Feature sequence to extract style (N, idim).
+            spembs (Tensor, optional): Speaker embedding vector (spk_embed_dim,).
+            threshold (float, optional): Threshold in inference.
+            minlenratio (float, optional): Minimum length ratio in inference.
+            maxlenratio (float, optional): Maximum length ratio in inference.
+            use_att_constraint (bool, optional): Whether to apply attention constraint.
+            backward_window (int, optional): Backward window in attention constraint.
+            forward_window (int, optional): Forward window in attention constraint.
+            use_teacher_forcing (bool, optional): Whether to use teacher forcing.
+
+        Returns:
+            Tensor: Output sequence of features (L, odim).
+            Tensor: Output sequence of stop probabilities (L,).
+            Tensor: Attention weights (L, T).
+
+        """
+        record = {23, 33, 70, 72, 76}
+        def get(x, words=3, lookahead=1):
+            l = x.size(0)
+            count = 0
+            b = []
+            i = 0
+            while i < l:
+                if x[i].item() == 1 and i < l-1 and x[i+1].item() in record:
+                    count += 1
+                    b.append(x[i+1])
+                    i += 2
+                elif x[i].item() == 1:
+                    count += 1
+                else:
+                    b.append(x[i])
+                if count == words:
+                    if b and (len(b) != 1 or b[0] not in record):
+                        b.append(self.eos)
+                        chunk_len = len(b)
+                        tmp_count = 0
+                        j = i + 1
+                        while j < l:
+                            if tmp_count == lookahead:
+                                break
+                            if x[j].item() == 1 and i < l-1 and x[j+1].item() in record:
+                                tmp_count += 1
+                                b.append(x[j+1])
+                                j += 2
+                            elif x[j].item() == 1:
+                                tmp_count += 1
+                            else:
+                                b.append(x[j])
+                            j += 1
+
+                        yield chunk_len, torch.tensor(b).long().cuda()
+                    b.clear()
+                    count = 0
+                i += 1
+            if b and (len(b) != 1 or b[0] not in record):
+                b.append(self.eos)
+                chunk_len = len(b)
+                yield chunk_len, torch.tensor(b).long().cuda()
+
+        x = text
+        y = speech
+        spemb = spembs
+
+        # add eos at the last of sequence
+        # x = F.pad(x, [0, 1], "constant", self.eos)
+
+        # inference with teacher forcing
+        if use_teacher_forcing:
+            assert speech is not None, "speech must be provided with teacher forcing."
+
+            xs, ys = x.unsqueeze(0), y.unsqueeze(0)
+            spembs = None if spemb is None else spemb.unsqueeze(0)
+            ilens = x.new_tensor([xs.size(1)]).long()
+            olens = y.new_tensor([ys.size(1)]).long()
+            outs, _, _, att_ws = self._forward(xs, ilens, ys, olens, spembs)
+
+            return outs[0], None, att_ws[0]
+
+        # inference
+        words = 3
+        lookahead = 1
+        diff = 0
+        buffer = 100
+        chunk = torch.tensor([]).long().cuda()
+        for cur_len, cur in get(x, words, lookahead):
+            add = cur.size(0) - diff
+            diff = cur.size(0) - cur_len
+            chunk = torch.cat([chunk, cur])
+            if chunk.size(0) > buffer:
+                chunk = chunk[-buffer:]
+            h = self.enc.inference(chunk)
+            
+            target_len = chunk.size(0) - diff
+            outs, probs, att_ws = self.dec.inference(
+                h,
+                threshold=threshold,
+                minlenratio=minlenratio,
+                maxlenratio=maxlenratio,
+                use_att_constraint=use_att_constraint,
+                backward_window=backward_window,
+                forward_window=forward_window,
+                buf=add,
+                target_len=target_len,
+            )
+            chunk = chunk[:target_len]
+
+        return outs, probs, att_ws
+
+
     def _integrate_with_spk_embed(
         self, hs: torch.Tensor, spembs: torch.Tensor
     ) -> torch.Tensor:
