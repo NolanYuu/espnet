@@ -629,50 +629,71 @@ if __name__ == "__main__":
     vocoder = load_model(download_pretrained_model(vocoder_tag)).to("cuda").eval()
     vocoder.remove_weight_norm()
 
-    cur = []
-    for mel_file in Path("/nolan/inference").iterdir():
-        pass
-        # if mel_file.name.endswith(".npy"):
-        #     # if not Path("/nolan/inference/{}.wav".format(mel_file.name)).exists():
-        #     mel = np.load(mel_file)
-        #     if mel.shape[0]:
-        #         wav = vocoder.inference(torch.from_numpy(mel).cuda())
-        #         cur.append(wav.data.cpu().numpy())
-        #         sf.write("/nolan/inference/{}.wav".format(mel_file.name), wav.data.cpu().numpy(), 22050, "PCM_16")
-    if cur:
-        wav = np.concatenate(cur)
-        print(wav.shape[0] / 22050)
-        sf.write("/nolan/inference/{}.wav".format("test"), wav, 22050, "PCM_16")
-        models = []
-    else:
-        models = [
-            # "transformer", 
-            # "tacotron2", 
-            # "fastspeech",
-            "fastspeech2",
-            # "conformer_fastspeech2",
-        ]
-    for model in models:
-        text2speech = Text2Speech("/nolan/test/espnet/egs2/hifi_9017/tts1/exp/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/config.yaml".format(model), "/nolan/test/espnet/egs2/hifi_9017/tts1/exp/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/valid.loss.best.pth".format(model), device="cuda")
-        # text2speech = Text2Speech("/nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/config.yaml".format(model), "/nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/train.loss.best.pth".format(model), device="cuda")
-        fs = text2speech.fs
-        text2speech.spc2wav = None
-        texts = [
-            # "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London,",
-            # "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London, The prison officials appear to be on the side of the inspectors, to the great dissatisfaction of the corporation, who claimed the full allegiance and support of its servants. "
+    # cur = []
+    # for mel_file in Path("/nolan/inference").iterdir():
+    #     pass
+    #     # if mel_file.name.endswith(".npy"):
+    #     #     # if not Path("/nolan/inference/{}.wav".format(mel_file.name)).exists():
+    #     #     mel = np.load(mel_file)
+    #     #     if mel.shape[0]:
+    #     #         wav = vocoder.inference(torch.from_numpy(mel).cuda())
+    #     #         cur.append(wav.data.cpu().numpy())
+    #     #         sf.write("/nolan/inference/{}.wav".format(mel_file.name), wav.data.cpu().numpy(), 22050, "PCM_16")
+    # if cur:
+    #     wav = np.concatenate(cur)
+    #     print(wav.shape[0] / 22050)
+    #     sf.write("/nolan/inference/{}.wav".format("test"), wav, 22050, "PCM_16")
+    #     models = []
+    # else:
+    #     models = [
+    #         # "transformer", 
+    #         # "tacotron2", 
+    #         # "fastspeech",
+    #         "fastspeech2",
+    #         # "conformer_fastspeech2",
+    #     ]
+    # for model in models:
+    #     text2speech = Text2Speech("/nolan/test/espnet/egs2/hifi_9017/tts1/exp/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/config.yaml".format(model), "/nolan/test/espnet/egs2/hifi_9017/tts1/exp/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/valid.loss.best.pth".format(model), device="cuda")
+    #     # text2speech = Text2Speech("/nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/config.yaml".format(model), "/nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_{}_raw_phn_tacotron_g2p_en_no_space/train.loss.best.pth".format(model), device="cuda")
+    #     fs = text2speech.fs
+    #     text2speech.spc2wav = None
+    #     texts = [
+    #         # "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London,",
+    #         # "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London, The prison officials appear to be on the side of the inspectors, to the great dissatisfaction of the corporation, who claimed the full allegiance and support of its servants. "
+    #         # "The Court in addition to the proper use of its judicial functions has improperly set itself up as a third house of the Congress. If, for instance, any one of the six justices of the Supreme Court now over the age of seventy should retire as provided under the plan, "
+    #         # "If such a plan is good for the lower courts it certainly ought to be equally good for the highest court from which there is no appeal. Is it a dangerous precedent for the Congress to change the number of the justices? The Congress has always had, and will have, that power.",
+    #         # "The prison officials appear to be on the side of the inspectors, to the great dissatisfaction of the corporation, who claimed the full allegiance and support of its servants.",
+    #         # "in some yards",
+    #         # "We have, therefore,",
+    #         "The feature matching loss is a learned similarity metric measured by the difference in features of the discriminator between a ground truth sample and a generated sample",
+    #     ]
+    #     with torch.no_grad():
+    #         for i, text in tqdm(enumerate(texts)):
+    #             text = re.sub(r"([,.?!])(?!\s)", r"\1 ", text).rstrip()
+    #             # print(time.time())
+    #             _, c, *_ = text2speech(text)
+    #             # sf.write("/nolan/inference/test_gl.wav", wav.data.cpu().numpy(), text2speech.fs, "PCM_16")
+    #             np.save("/nolan/inference/{}_{:02d}.mel.npy".format(model, i), c.data.cpu().numpy())
+    #             wav = vocoder.inference(c)
+    #             sf.write("/nolan/inference/{}_{:02d}.wav".format(model, i), wav.data.cpu().numpy(), fs, "PCM_16")
+
+    text2speech = Text2Speech("/nolan/test/espnet/egs2/ljspeech/tts1/exp/tts_train_gradtts_raw_phn_tacotron_g2p_en_no_space/config.yaml", "/nolan/test/espnet/egs2/ljspeech/tts1/exp/tts_train_gradtts_raw_phn_tacotron_g2p_en_no_space/valid.loss.best.pth", device="cuda")
+    fs = text2speech.fs
+    text2speech.spc2wav = None
+    texts = [
+            "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London,",
+            # "they state that they are compelled by an imperative sense of duty to advert in terms of decided condemnation to the lamentable condition of the prisons of the city of London, The prison officials appear to be on the side of the inspectors, to the great dissatisfaction of the corporation, who claimed the full allegiance and support of its servants. The Court in addition to the proper use of its judicial functions has improperly set itself up as a third house of the Congress. If, for instance, any one of the six justices of the Supreme Court now over the age of seventy should retire as provided under the plan, Diffusion models are straightforward to define and efficient to train, but to the best of our knowledge, there has been no demonstration that they are capable of generating high quality samples."
             # "The Court in addition to the proper use of its judicial functions has improperly set itself up as a third house of the Congress. If, for instance, any one of the six justices of the Supreme Court now over the age of seventy should retire as provided under the plan, "
             # "If such a plan is good for the lower courts it certainly ought to be equally good for the highest court from which there is no appeal. Is it a dangerous precedent for the Congress to change the number of the justices? The Congress has always had, and will have, that power.",
             # "The prison officials appear to be on the side of the inspectors, to the great dissatisfaction of the corporation, who claimed the full allegiance and support of its servants.",
             # "in some yards",
             # "We have, therefore,",
-            "The feature matching loss is a learned similarity metric measured by the difference in features of the discriminator between a ground truth sample and a generated sample",
+            # "The feature matching loss is a learned similarity metric measured by the difference in features of the discriminator between a ground truth sample and a generated sample",
         ]
-        with torch.no_grad():
-            for i, text in tqdm(enumerate(texts)):
-                text = re.sub(r"([,.?!])(?!\s)", r"\1 ", text).rstrip()
-                # print(time.time())
-                _, c, *_ = text2speech(text)
-                # sf.write("/nolan/inference/test_gl.wav", wav.data.cpu().numpy(), text2speech.fs, "PCM_16")
-                np.save("/nolan/inference/{}_{:02d}.mel.npy".format(model, i), c.data.cpu().numpy())
-                wav = vocoder.inference(c)
-                sf.write("/nolan/inference/{}_{:02d}.wav".format(model, i), wav.data.cpu().numpy(), fs, "PCM_16")
+    with torch.no_grad():
+        for i, text in tqdm(enumerate(texts)):
+            text = re.sub(r"([,.?!])(?!\s)", r"\1 ", text).rstrip()
+            _, c, *_ = text2speech(text)
+            np.save("/nolan/inference/gradtts_{:02d}.mel.npy".format(i), c.data.cpu().numpy())
+            wav = vocoder.inference(c)
+            sf.write("/nolan/inference/gradtts_{:02d}.wav".format(i), wav.data.cpu().numpy(), fs, "PCM_16")

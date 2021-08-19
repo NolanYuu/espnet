@@ -94,13 +94,17 @@ class GradTTS(AbsTTS):
         odim,
         adim: int = 192,
         aheads: int = 2,
-        elayers: int = 6,
+        elayers: int = 4,
         eunits: int = 768,
+        dlayers: int = 2,
+        dunits: int = 768,
         use_scaled_pos_enc: bool = True,
         positionwise_layer_type: str = "conv1d",
         positionwise_conv_kernel_size: int = 1,
         encoder_normalize_before: bool = True,
+        decoder_normalize_before: bool = True,
         encoder_concat_after: bool = False,
+        decoder_concat_after: bool = False,
         duration_predictor_layers: int = 2,
         duration_predictor_chans: int = 192,
         duration_predictor_kernel_size: int = 3,
@@ -108,6 +112,9 @@ class GradTTS(AbsTTS):
         transformer_enc_dropout_rate: float = 0.1,
         transformer_enc_positional_dropout_rate: float = 0.1,
         transformer_enc_attn_dropout_rate: float = 0.1,
+        transformer_dec_dropout_rate: float = 0.1,
+        transformer_dec_positional_dropout_rate: float = 0.1,
+        transformer_dec_attn_dropout_rate: float = 0.1,
         init_type: str = "xavier_uniform",
         init_enc_alpha: float = 1.0,
         use_masking: bool = False,
@@ -130,7 +137,7 @@ class GradTTS(AbsTTS):
         pos_enc_class = (
             ScaledPositionalEncoding if self.use_scaled_pos_enc else PositionalEncoding
         )
-        self.encoder = GradTTSEncoder(
+        self.encoder = TransformerEncoder(
             idim=adim,
             attention_dim=adim,
             attention_heads=aheads,
@@ -146,7 +153,6 @@ class GradTTS(AbsTTS):
             positionwise_layer_type=positionwise_layer_type,
             positionwise_conv_kernel_size=positionwise_conv_kernel_size,
         )
-        self.proj_m = torch.nn.Conv1d(adim, odim, 1)
 
         self.duration_predictor = DurationPredictor(
             idim=adim,
@@ -156,6 +162,25 @@ class GradTTS(AbsTTS):
             dropout_rate=duration_predictor_dropout_rate,
         )
         self.length_regulator = LengthRegulator()
+
+        self.pre_decoder = TransformerEncoder(
+            idim=0,
+            attention_dim=adim,
+            attention_heads=aheads,
+            linear_units=dunits,
+            num_blocks=dlayers,
+            input_layer=None,
+            dropout_rate=transformer_dec_dropout_rate,
+            positional_dropout_rate=transformer_dec_positional_dropout_rate,
+            attention_dropout_rate=transformer_dec_attn_dropout_rate,
+            pos_enc_class=pos_enc_class,
+            normalize_before=decoder_normalize_before,
+            concat_after=decoder_concat_after,
+            positionwise_layer_type=positionwise_layer_type,
+            positionwise_conv_kernel_size=positionwise_conv_kernel_size,
+        )
+        
+        self.feat_out = torch.nn.Linear(adim, odim)
 
         self.decoder = Diffusion(ddim, beta_min, beta_max, pe_scale)
 
@@ -229,13 +254,15 @@ class GradTTS(AbsTTS):
     ):
         x_masks = self._source_mask(ilens)  # (B, 1, Tmax)
         y_masks = self._source_mask(olens)  # (B, 1, Lmax)
-        hs = self.encoder(xs, x_masks)  # (B, Tmax, adim)
-        mu = self.proj_m(hs.transpose(1, 2)) * x_masks  # (B, odim, Tmax)
-        mu = mu.transpose(1, 2)  # (B, odim, Tmax)
+        hs, _ = self.encoder(xs, x_masks)  # (B, Tmax, adim)
 
         d_masks = make_pad_mask(ilens).to(xs.device)
         d_outs = self.duration_predictor(hs, d_masks)
-        mu = self.length_regulator(mu, ds)  # (B, Lmax, odim)
+        mu = self.length_regulator(hs, ds)  # (B, Lmax, adim)
+
+        mu, _ = self.pre_decoder(mu, y_masks) # (B, Lmax, adim)
+
+        mu = self.feat_out(mu) # (B, Lmax, odim)
 
         mu = mu.transpose(1, 2)  # (B, odim, Lmax)
         if mu.size(2) % 4 != 0:
@@ -252,6 +279,7 @@ class GradTTS(AbsTTS):
         spembs: torch.Tensor = None,
         temperature: float = 1.0,
         alpha: float = 1.0,
+        use_teacher_forcing: bool = False,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         x = text
         x = F.pad(x, [0, 1], "constant", self.eos)
@@ -259,23 +287,28 @@ class GradTTS(AbsTTS):
         xs = x.unsqueeze(0)
         x_masks = self._source_mask(ilens)
         hs, _ = self.encoder(xs, x_masks)
-        mu = self.proj_m(hs.transpose(1, 2)) * x_masks  # (B, odim, Tmax)
-        mu = mu.transpose(1, 2)  # (B, odim, Tmax)
 
         d_masks = make_pad_mask(ilens).to(xs.device)
-        d_outs = self.duration_predictor(hs, d_masks)
-        mu = self.length_regulator(mu, d_outs, alpha)  # (B, Lmax, odim)
+        d_outs = self.duration_predictor.inference(hs, d_masks)
+        mu = self.length_regulator(hs, d_outs, alpha)  # (B, Lmax, odim)
+        length = mu.size(1)
+        y_masks = torch.ones([1, 1, mu.size(1)], dtype=torch.int64, device=mu.device)
+        mu, _ = self.pre_decoder(mu, y_masks) # (B, Lmax, adim)
+        mu = self.feat_out(mu) # (B, Lmax, odim)
 
         mu = mu.transpose(1, 2)  # (B, odim, Lmax)
+
+        # import numpy as np
+        # np.save("/nolan/inference/gradtts_pre.mel.npy", mu[0].transpose(0, 1).data.cpu().numpy())
         if mu.size(2) % 4 != 0:
             mu = torch.cat([mu, torch.zeros([1, self.odim, 4 - mu.size(2) % 4], dtype=mu.dtype, device=mu.device)], dim=2)
-        y_masks = torch.ones([1, 1, mu.size(2)], dtype=torch.int64, device=x.device)
+            y_masks = torch.cat([y_masks, torch.zeros([1, 1, 4 - y_masks.size(2) % 4], dtype=y_masks.dtype, device=y_masks.device)], dim=2)
         
         z = mu + torch.randn_like(mu, device=mu.device) / temperature
 
-        out = self.decoder.inference(z, y_masks, mu, timesteps)
+        out = self.decoder.inference(z, y_masks, mu, timesteps).transpose(1, 2)
 
-        return out[0]
+        return out[0, :length, :], None, None
 
     def _source_mask(self, ilens: torch.Tensor) -> torch.Tensor:
         x_masks = make_non_pad_mask(ilens).to(next(self.parameters()).device)
