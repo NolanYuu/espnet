@@ -1,0 +1,59 @@
+# This configuration is for ESPnet2 to train Tacotron 2. Compared to the
+# original paper, this configuration additionally use the guided attention
+# loss to accelerate the learning of the diagonal attention. It requires
+# only a single GPU with 12 GB memory and it takes ~3 days to finish the
+# training on Titan V.
+
+##########################################################
+#                  TTS MODEL SETTING                     #
+##########################################################
+tts: gradfastspeech2                     # model architecture
+tts_conf:                        # keyword arguments for the selected model
+    config_file: /nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_fastspeech2_raw_phn_tacotron_g2p_en_no_space/config.yaml
+    model_file: /nolan/test/espnet/egs2/ljspeech/tts1/tmp_save/tts_train_fastspeech2_raw_phn_tacotron_g2p_en_no_space/train.loss.best.pth
+    ddim: 64 #  == grad-tts dec_dim
+    beta_min: 0.05
+    beta_max: 20.0
+    pe_scale: 1000
+
+# extra module for additional inputs
+pitch_extract: dio           # pitch extractor type
+pitch_normalize: global_mvn  # normalizer for the pitch feature
+energy_extract: energy       # energy extractor type
+energy_normalize: global_mvn # normalizer for the energy feature
+
+##########################################################
+#                  OPTIMIZER SETTING                     #
+##########################################################
+optim: adam           # optimizer type
+optim_conf:           # keyword arguments for selected optimizer
+    lr: 2.0e-04       # learning rate
+    eps: 1.0e-06      # epsilon
+    weight_decay: 0.0 # weight decay coefficient
+
+##########################################################
+#                OTHER TRAINING SETTING                  #
+##########################################################
+num_iters_per_epoch: 800    # number of iterations per epoch
+max_epoch: 10000            # number of epochs
+grad_clip: 1.0              # gradient clipping norm
+grad_noise: false           # whether to use gradient noise injection
+accum_grad: 1               # gradient accumulation
+# batch_bins: 1600000       # batch bins (for feats_type=fbank)
+batch_bins: 1000000         # batch bins (for feats_type=raw, *= n_shift / n_mels)
+batch_type: numel           # how to make batch
+sort_in_batch: descending   # how to sort data in making batch
+sort_batch: descending      # how to sort created batches
+num_workers: 1              # number of workers of data loader
+train_dtype: float32        # dtype in training
+log_interval: null          # log interval in iterations
+keep_nbest_models: 5        # number of models to keep
+num_att_plot: 3             # number of attention figures to be saved in every check
+seed: 0                     # random seed number
+best_model_criterion:
+-   - valid
+    - loss
+    - min
+-   - train
+    - loss
+    - min

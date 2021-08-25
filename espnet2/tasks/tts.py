@@ -23,6 +23,7 @@ from espnet2.tts.abs_tts import AbsTTS
 from espnet2.tts.espnet_model import ESPnetTTSModel
 from espnet2.tts.fastspeech import FastSpeech
 from espnet2.tts.fastspeech2 import FastSpeech2
+from espnet2.tts.gradfastspeech2 import GradFastSpeech2
 from espnet2.tts.gradtts import GradTTS
 from espnet2.tts.fastspeech2_rnn import FastSpeech2_RNN
 from espnet2.tts.feats_extract.abs_feats_extract import AbsFeatsExtract
@@ -88,6 +89,7 @@ tts_choices = ClassChoices(
         fastspeech2=FastSpeech2,
         fastspeech2_rnn=FastSpeech2_RNN,
         gradtts=GradTTS,
+        gradfastspeech2=GradFastSpeech2,
     ),
     type_check=AbsTTS,
     default="tacotron2",
