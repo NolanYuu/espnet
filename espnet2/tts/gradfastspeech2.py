@@ -43,7 +43,8 @@ class GradFastSpeech2(AbsTTS):
             if key.startswith("tts"):
                 d[key[4:]] = value
         self.fastspeech2.load_state_dict(d)
-        self.fastspeech2.require_grad = False
+        for p in self.fastspeech2.parameters():
+            p.requires_grad = False
 
         self.diffusion = Diffusion(ddim, beta_min, beta_max, pe_scale)
 
@@ -107,13 +108,15 @@ class GradFastSpeech2(AbsTTS):
     def inference(
         self,
         text: torch.Tensor,
-        timesteps: int = 10,
+        timesteps: int = 50,
         spembs: torch.Tensor = None,
         temperature: float = 1.0,
         alpha: float = 1.03,
         use_teacher_forcing: bool = False,
     ):
         mu, _, _ = self.fastspeech2.inference(text, alpha=alpha, use_teacher_forcing=use_teacher_forcing)
+        # import numpy as np
+        # np.save("/nolan/inference/gradtts_pre.mel.npy", mu.data.cpu().numpy())
         length = mu.shape[0]
         olens = torch.tensor([length], dtype=torch.long, device=mu.device)
         y_masks = self._source_mask(olens)
@@ -123,7 +126,7 @@ class GradFastSpeech2(AbsTTS):
             y_masks = torch.cat([y_masks, torch.zeros([1, 1, 4 - y_masks.size(2) % 4], dtype=y_masks.dtype, device=y_masks.device)], dim=2)
         z = mu + torch.randn_like(mu, device=mu.device) / temperature
         out = self.diffusion.inference(z, y_masks, mu, timesteps).transpose(1, 2)
-        return out[0, :length, :]
+        return out[0, :length, :], None, None
 
     def _source_mask(self, ilens: torch.Tensor) -> torch.Tensor:
         x_masks = make_non_pad_mask(ilens).to(next(self.parameters()).device)

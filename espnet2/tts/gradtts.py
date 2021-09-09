@@ -356,7 +356,7 @@ class GradTTS(AbsTTS):
     def inference(
         self,
         text: torch.Tensor,
-        timesteps: int = 20,
+        timesteps: int = 10,
         spembs: torch.Tensor = None,
         temperature: float = 1.0,
         alpha: float = 1.03,

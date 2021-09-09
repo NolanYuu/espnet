@@ -836,7 +836,7 @@ class AbsTask(ABC):
                 params=model.parameters(), optim=optim_class, **args.optim_conf
             )
         else:
-            optim = optim_class(model.parameters(), **args.optim_conf)
+            optim = optim_class(filter(lambda p: p.requires_grad, model.parameters()), **args.optim_conf)
 
         optimizers = [optim]
         return optimizers

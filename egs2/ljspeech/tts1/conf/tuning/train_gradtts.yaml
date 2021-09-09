@@ -37,15 +37,15 @@ tts_conf:                        # keyword arguments for the selected model
     beta_min: 0.05
     beta_max: 20.0
     pe_scale: 1000
-    pitch_predictor_layers: 2                  # number of conv layers in pitch predictor
-    pitch_predictor_chans: 64                  # number of channels of conv layers in pitch predictor
-    pitch_predictor_kernel_size: 3             # kernel size of conv leyers in pitch predictor
+    pitch_predictor_layers: 5                  # number of conv layers in pitch predictor
+    pitch_predictor_chans: 256                 # number of channels of conv layers in pitch predictor
+    pitch_predictor_kernel_size: 5             # kernel size of conv leyers in pitch predictor
     pitch_predictor_dropout: 0.5               # dropout rate in pitch predictor
     pitch_embed_kernel_size: 1                 # kernel size of conv embedding layer for pitch
     pitch_embed_dropout: 0.0                   # dropout rate after conv embedding layer for pitch
     stop_gradient_from_pitch_predictor: true   # whether to stop the gradient from pitch predictor to encoder
     energy_predictor_layers: 2                 # number of conv layers in energy predictor
-    energy_predictor_chans: 64                # number of channels of conv layers in energy predictor
+    energy_predictor_chans: 256                # number of channels of conv layers in energy predictor
     energy_predictor_kernel_size: 3            # kernel size of conv leyers in energy predictor
     energy_predictor_dropout: 0.5              # dropout rate in energy predictor
     energy_embed_kernel_size: 1                # kernel size of conv embedding layer for energy
@@ -71,7 +71,7 @@ optim_conf:           # keyword arguments for selected optimizer
 #                OTHER TRAINING SETTING                  #
 ##########################################################
 num_iters_per_epoch: 800    # number of iterations per epoch
-max_epoch: 10000            # number of epochs
+max_epoch: 1000            # number of epochs
 grad_clip: 1.0              # gradient clipping norm
 grad_noise: false           # whether to use gradient noise injection
 accum_grad: 1               # gradient accumulation
