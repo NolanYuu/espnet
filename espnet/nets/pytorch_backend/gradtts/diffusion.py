@@ -201,9 +201,11 @@ class Diffusion(torch.nn.Module):
 
         return yt * y_masks, z * y_masks
 
-    def reverse_diffusion(self, z, mask, mu, timesteps):
+    def reverse_diffusion(self, z, mask, mu, timesteps, length):
         h = 1.0 / timesteps
         xt = z * mask  # (B, 80, T)
+        import numpy as np
+        np.save("/nolan/inference/gradtts_step_00.mel.npy", mu[0, :, :length].transpose(0, 1).data.cpu().numpy())
         for i in range(timesteps):
             t = (1.0 - (i + 0.5) * h) * torch.ones(z.shape[0], dtype=z.dtype, device=z.device)  # (B,)
             time = t.unsqueeze(-1).unsqueeze(-1)  # (B, 1, 1)
@@ -211,6 +213,7 @@ class Diffusion(torch.nn.Module):
             dxt = 0.5 * (mu - xt - self.estimator(xt, mask, mu, t))
             dxt = dxt * noise_t * h
             xt = (xt - dxt) * mask
+            np.save("/nolan/inference/gradtts_step_{:02d}.mel.npy".format(i+1), xt[0, :, :length].transpose(0, 1).data.cpu().numpy())
 
         return xt
 
@@ -227,8 +230,8 @@ class Diffusion(torch.nn.Module):
 
         return noise_estimation, z
 
-    def inference(self, z, mask, mu, timesteps):
-        return self.reverse_diffusion(z, mask, mu, timesteps)
+    def inference(self, z, mask, mu, timesteps, length):
+        return self.reverse_diffusion(z, mask, mu, timesteps, length)
 
     def get_noise(self, time, beta_init, beta_term, cumulative=False):
         if cumulative:

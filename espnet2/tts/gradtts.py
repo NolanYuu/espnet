@@ -356,7 +356,7 @@ class GradTTS(AbsTTS):
     def inference(
         self,
         text: torch.Tensor,
-        timesteps: int = 10,
+        timesteps: int = 20,
         spembs: torch.Tensor = None,
         temperature: float = 1.0,
         alpha: float = 1.03,
@@ -400,7 +400,7 @@ class GradTTS(AbsTTS):
         
         z = mu + torch.randn_like(mu, device=mu.device) / temperature
 
-        out = self.decoder.inference(z, y_masks, mu, timesteps).transpose(1, 2)
+        out = self.decoder.inference(z, y_masks, mu, timesteps, length).transpose(1, 2)
 
         return out[0, :length, :], None, None
 
